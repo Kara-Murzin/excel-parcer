@@ -63,6 +63,7 @@ export default function ExcelComparer() {
       return;
     }
     
+    // orderMap теперь будет содержать 0-based индексы строк matched
     const orderMap = new Map();
     for (let i = 0; i < matched.length; ++i) {
       const rowObj = matched[i];
@@ -72,7 +73,7 @@ export default function ExcelComparer() {
         if (!orderMap.has(orderId)) {
           orderMap.set(orderId, []);
         }
-        orderMap.get(orderId).push(i);
+        orderMap.get(orderId).push(i); // Сохраняем индекс строки в массиве matched
       }
     }
 
@@ -139,17 +140,37 @@ export default function ExcelComparer() {
       });
     };
 
-    const finalMatchedData = cleanObjectKeys(filteredMatched);
-    const finalUnmatchedData = cleanObjectKeys(filteredUnmatched);
+    let finalMatchedData = cleanObjectKeys(filteredMatched);
+    let finalUnmatchedData = cleanObjectKeys(filteredUnmatched);
     // === КОНЕЦ ЛОГИКИ ОЧИСТКИ ЗАГОЛОВКОВ ===
 
+    // === ЛОГИКА: КОПИРОВАНИЕ СТОЛБЦОВ В КОНЕЦ ===
+    const originalColumnToCopy1 = sanitizeHeaderName("Номер-посылки-(накладной)");
+    const originalColumnToCopy2 = sanitizeHeaderName("наименование на русском");
 
-    // === НОВАЯ ЛОГИКА: ИЗМЕНЕНИЕ ПОРЯДКА СТОЛБЦОВ ===
-    // *** ОЧЕНЬ ВАЖНО: Заполните этот массив всеми ЗАГОЛОВКАМИ, которые должны остаться,
-    // *** в том порядке, в котором вы хотите их видеть. Используйте ОЧИЩЕННЫЕ названия.
-    // Пример:
+    const copyColumnSuffix = " (копия)";
+
+    const addColumnCopies = (dataArray) => {
+        return dataArray.map(row => {
+            const newRow = { ...row };
+            if (row[originalColumnToCopy1] !== undefined) {
+                newRow[originalColumnToCopy1 + copyColumnSuffix] = row[originalColumnToCopy1];
+            }
+            if (row[originalColumnToCopy2] !== undefined) {
+                newRow[originalColumnToCopy2 + copyColumnSuffix] = row[originalColumnToCopy2];
+            }
+            return newRow;
+        });
+    };
+
+    finalMatchedData = addColumnCopies(finalMatchedData);
+    finalUnmatchedData = addColumnCopies(finalUnmatchedData);
+    // === КОНЕЦ ЛОГИКИ КОПИРОВАНИЯ СТОЛБЦОВ ===
+
+
+    // === ЛОГИКА: ИЗМЕНЕНИЕ ПОРЯДКА СТОЛБЦОВ ===
     const customColumnOrder = [
-        "Номер-посылки- накладной",
+        sanitizeHeaderName("Номер-посылки-(накладной)"),
         "ФАМИЛИЯ",
         "ИМЯ",
         "ОТЧЕСТВО",
@@ -158,7 +179,7 @@ export default function ExcelComparer() {
         "ОБЛАСТЬ",
         "индекс",
         "ТЕЛЕФОН",
-        "общ. Количество товаров в посылке накладной",
+        sanitizeHeaderName("общ. Количество товаров в посылке (накладной)"),
         "количество вложений",
         "наименование на русском",
         "Цена товара",
@@ -170,10 +191,9 @@ export default function ExcelComparer() {
         "ИНН",
         "общий вес вложений",
         "общий вес посылки",
-        "Контактное лицо (телефон), получатель  в  РОССИИ",
+        sanitizeHeaderName("Контактное лицо (телефон), получатель  в  РОССИИ"),
     ];
 
-    // Функция для получения всех уникальных заголовков из данных
     const getAllUniqueHeaders = (dataArray) => {
       const headers = new Set();
       dataArray.forEach(row => {
@@ -182,16 +202,14 @@ export default function ExcelComparer() {
       return Array.from(headers);
     };
 
-    // Определяем окончательный порядок заголовков для matched
     let finalHeadersMatched = [...customColumnOrder];
     const actualHeadersMatched = getAllUniqueHeaders(finalMatchedData);
     actualHeadersMatched.forEach(header => {
       if (!finalHeadersMatched.includes(header)) {
-        finalHeadersMatched.push(header); // Добавляем столбцы, не указанные в customColumnOrder, в конец
+        finalHeadersMatched.push(header);
       }
     });
 
-    // Определяем окончательный порядок заголовков для unmatched (может быть другим, если у них разные наборы столбцов)
     let finalHeadersUnmatched = [...customColumnOrder];
     const actualHeadersUnmatched = getAllUniqueHeaders(finalUnmatchedData);
     actualHeadersUnmatched.forEach(header => {
@@ -199,49 +217,71 @@ export default function ExcelComparer() {
         finalHeadersUnmatched.push(header);
       }
     });
-    // === КОНЕЦ НОВОЙ ЛОГИКИ ===
+    // === КОНЕЦ ЛОГИКИ ИЗМЕНЕНИЯ ПОРЯДКА ===
 
 
-    // Создаем wsMatched из ОТФИЛЬТРОВАННОГО И ОЧИЩЕННОГО массива с УКАЗАННЫМ ПОРЯДКОМ ЗАГОЛОВКОВ
+    // Создаем wsMatched из ОТФИЛЬТРОВАННОГО, ОЧИЩЕННОГО И СКОПИРОВАННОГО массива с УКАЗАННЫМ ПОРЯДКОМ ЗАГОЛОВКОВ
     const wsMatched = XLSX.utils.json_to_sheet(finalMatchedData, { cellStyles: true, header: finalHeadersMatched });
 
-    // Теперь получаем диапазон из свежесозданного wsMatched
     const range = wsMatched['!ref'] ? XLSX.utils.decode_range(wsMatched['!ref']) : null;
 
-    // Применяем стили (границы)
+    // === НОВАЯ ЛОГИКА: ПОДСВЕТКА ЗАКАЗОВ С КОЛИЧЕСТВОМ ТОВАРОВ БОЛЬШЕ 5 ===
+    const highlightColor = { rgb: "FFFF99" }; 
+
     if (range) {
+        // Проходим по orderMap, чтобы применить стили
         for (const indices of orderMap.values()) {
+            const itemCount = indices.length; // Количество строк (товаров) для текущего заказа
+
+            // Определяем, нужно ли подсвечивать этот заказ
+            const shouldHighlight = itemCount > 5;
+
+            // Индексы строк в Excel (1-based), принадлежащих текущему заказу
+            // indices содержат 0-based индексы в `matched` массиве,
+            // который сохранил свой порядок в `finalMatchedData`.
             const firstRowExcel = indices[0] + 1;
             const lastRowExcel = indices[indices.length - 1] + 1;
 
-            for (let C = range.s.c; C <= range.e.c; ++C) {
-                const cellTop = XLSX.utils.encode_cell({ r: firstRowExcel, c: C });
-                if (wsMatched[cellTop]) {
-                    wsMatched[cellTop].s = {
-                        ...wsMatched[cellTop].s,
-                        border: {
-                            ...(wsMatched[cellTop].s?.border || {}),
-                            top: borderStyle
-                        }
-                    };
-                }
+            // Применяем стили ко всем ячейкам в строках этого заказа
+            for (let R = firstRowExcel; R <= lastRowExcel; ++R) { // Итерируем по Excel-строкам
+                for (let C = range.s.c; C <= range.e.c; ++C) { // Итерируем по всем Excel-столбцам
+                    const cellRef = XLSX.utils.encode_cell({ r: R, c: C });
+                    const cell = wsMatched[cellRef];
 
-                const cellBottom = XLSX.utils.encode_cell({ r: lastRowExcel, c: C });
-                if (wsMatched[cellBottom]) {
-                    wsMatched[cellBottom].s = {
-                        ...wsMatched[cellBottom].s,
-                        border: {
-                            ...(wsMatched[cellBottom].s?.border || {}),
-                            bottom: borderStyle
+                    if (cell) {
+                        if (!cell.s) cell.s = {}; // Убедимся, что объект стиля 's' существует
+
+                        // Применяем фоновую заливку, если нужно
+                        if (shouldHighlight) {
+                            cell.s.fill = {
+                                fgColor: highlightColor,
+                                patternType: "solid"
+                            };
                         }
-                    };
+
+                        // Сохраняем логику границ (верхняя для первой строки, нижняя для последней)
+                        // Это важно, чтобы подсветка не перезаписала границы.
+                        if (R === firstRowExcel) {
+                            cell.s.border = {
+                                ...(cell.s.border || {}), // Сохраняем существующие стили границ
+                                top: borderStyle
+                            };
+                        }
+                        if (R === lastRowExcel) {
+                            cell.s.border = {
+                                ...(cell.s.border || {}), // Сохраняем существующие стили границ
+                                bottom: borderStyle
+                            };
+                        }
+                    }
                 }
             }
         }
     }
+    // === КОНЕЦ НОВОЙ ЛОГИКИ ===
 
 
-    // Создаем wsUnmatched из ОТФИЛЬТРОВАННОГО И ОЧИЩЕННОГО массива с УКАЗАННЫМ ПОРЯДКОМ ЗАГОЛОВКОВ
+    // Создаем wsUnmatched - для этого листа подсветка не требуется по заданию
     const wsUnmatched = XLSX.utils.json_to_sheet(finalUnmatchedData, { header: finalHeadersUnmatched });
 
     XLSX.utils.book_append_sheet(wb, wsMatched, 'Совпавшие');
