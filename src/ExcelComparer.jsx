@@ -47,7 +47,6 @@ export default function ExcelComparer() {
       }
     }
 
-    // Создаем пустой рабочий документ для результатов
     const wb = XLSX.utils.book_new();
 
     const borderStyle = {
@@ -55,75 +54,99 @@ export default function ExcelComparer() {
       color: { rgb: "000000" }
     };
 
-    // Построим карту: ключ = номер посылки, значения = индексы строк (в Excel)
-    // Важно: orderMap строится на основе 'matched' массива, который еще не модифицирован по весу.
-    // Однако, индексы строк используются для прямого доступа к 'matched' массиву.
-    const orderMap = new Map();
-    // Мы должны временно создать wsMatched, чтобы получить диапазон,
-    // или пересчитать его из `matched.length`.
-    // Для более надежного получения диапазона после сортировки/фильтрации,
-    // лучше использовать данные после всех преобразований.
-    // Переместим создание wsMatched и range после обработки веса.
-
     // === ЛОГИКА УДАЛЕНИЯ ДУБЛИКАТОВ ВЕСА ===
-    const columns = Object.keys(sheetData1[0] || {}); // Добавил || {} на случай пустого sheetData1
+    const columns = Object.keys(sheetData1[0] || {});
     const weightColumnName = "包裹重量一个包裹一次备注就行общий вес посылки";
 
-    if (!columns.includes(weightColumnName)) { // Проверка на наличие колонки веса
+    if (!columns.includes(weightColumnName)) {
       alert(`Колонка "${weightColumnName}" не найдена в файле.`);
       return;
     }
     
-    // Сначала построим orderMap, чтобы знать, какие строки относятся к одному заказу
-    // Индексы здесь относятся к массиву `matched` (0-based)
+    const orderMap = new Map();
     for (let i = 0; i < matched.length; ++i) {
       const rowObj = matched[i];
       const orderId = rowObj?.[targetColumnName];
 
-      if (orderId !== undefined && orderId !== null && orderId !== '') { // Убедимся, что orderId не пустой
+      if (orderId !== undefined && orderId !== null && orderId !== '') {
         if (!orderMap.has(orderId)) {
           orderMap.set(orderId, []);
         }
-        orderMap.get(orderId).push(i); // Сохраняем 0-based индекс в matched
+        orderMap.get(orderId).push(i);
       }
     }
 
-    // Удаляем дубли веса
     for (const indices of orderMap.values()) {
-      if (indices.length <= 1) continue; // Если только одна строка для заказа, нет дубликатов веса
+      if (indices.length <= 1) continue;
 
-      // Индекс первой строки для текущего заказа в массиве `matched`
       const firstRowIndexInMatched = indices[0];
       const firstWeight = normalize(matched[firstRowIndexInMatched]?.[weightColumnName]);
 
-      // Проходим по остальным строкам того же заказа и очищаем вес, если он дублируется
       for (let i = 1; i < indices.length; ++i) {
         const currentRowIndexInMatched = indices[i];
         const row = matched[currentRowIndexInMatched];
 
         if (normalize(row?.[weightColumnName]) === firstWeight) {
-          row[weightColumnName] = ''; // Очищаем вес
+          row[weightColumnName] = '';
         }
       }
     }
-
     // === КОНЕЦ ЛОГИКИ УДАЛЕНИЯ ДУБЛИКАТОВ ВЕСА ===
 
-    // !!! ВОТ ЗДЕСЬ ПЕРЕНОСИМ СОЗДАНИЕ wsMatched !!!
-    // Создаем wsMatched из МОДИФИЦИРОВАННОГО массива matched
-    const wsMatched = XLSX.utils.json_to_sheet(matched, { cellStyles: true });
+
+    // === НОВАЯ ЛОГИКА: УДАЛЕНИЕ СТОЛБЦОВ ПО СПИСКУ ===
+    const columnsToRemove = [
+      "收件人", "收件地址", "收件人城市", "收件人州省", "国家简码",
+      "收件国家", "寄件国家", "寄件申报品名", "收件申报品名", "海关编码",
+      "重量", // Обратите внимание: у вас есть "包裹重量..." и "重量". Если это одно и то же, оставьте только одно в списке.
+      "内部单号", "订单号", "发货时间", "物流方式", "袋号", "分拣人",
+      "长宽高", "体积重", "仓库名称", "是否带电", "产品信息",
+      "产品信息sku1", "SKU", "ENGLISH", "Брэнд/изготовитель", "Материал",
+      "Группа товаров", "单品价格цена за 1 вложение(товар) в юанях","Цена поставщика", "__EMPTY"
+    ];
+
+    // Функция для фильтрации объектов данных, удаляющая указанные столбцы
+    const filterColumns = (dataArray) => {
+      return dataArray.map(row => {
+        const newRow = {};
+        for (const key in row) {
+          // Если ключ не содержится в списке columnsToRemove, добавляем его в новую строку
+          if (!columnsToRemove.includes(key)) {
+            newRow[key] = row[key];
+          }
+        }
+        return newRow;
+      });
+    };
+
+    const filteredMatched = filterColumns(matched);
+    const filteredUnmatched = filterColumns(unmatched);
+    // === КОНЕЦ НОВОЙ ЛОГИКИ ===
+
+
+    // Создаем wsMatched из ОТФИЛЬТРОВАННОГО массива
+    const wsMatched = XLSX.utils.json_to_sheet(filteredMatched, { cellStyles: true });
 
     // Теперь получаем диапазон из свежесозданного wsMatched
     const range = wsMatched['!ref'] ? XLSX.utils.decode_range(wsMatched['!ref']) : null;
 
     // Применяем стили (границы)
-    if (range) { // Убедимся, что диапазон существует
+    if (range) {
+        // Мы должны пересоздать orderMap, основываясь на filteredMatched,
+        // или найти соответствия original_row_index -> filtered_row_index
+        // Но так как мы удаляем столбцы, а не строки, старые индексы (из matched) все еще применимы,
+        // если считать их как индекс в списке (после фильтрации столбцов, порядок строк не меняется)
+        // Единственная проблема: если какая-то строка была удалена из `matched` полностью,
+        // но в вашем случае мы только очищаем поля, не удаляем строки из `matched`.
+        // Поэтому, `orderMap` (с индексами в `matched`) можно использовать напрямую.
         for (const indices of orderMap.values()) {
-            const firstRowExcel = indices[0] + 1; // Convert 0-based matched index to 1-based Excel row
-            const lastRowExcel = indices[indices.length - 1] + 1; // Convert 0-based matched index to 1-based Excel row
+            // Конвертируем 0-based индекс из `matched` в 1-based Excel row.
+            // Индексы в `orderMap` ссылаются на исходный `matched` массив,
+            // который имеет ту же последовательность строк, что и `filteredMatched`.
+            const firstRowExcel = indices[0] + 1;
+            const lastRowExcel = indices[indices.length - 1] + 1;
 
             for (let C = range.s.c; C <= range.e.c; ++C) {
-                // Стиль верхней границы для первой строки заказа
                 const cellTop = XLSX.utils.encode_cell({ r: firstRowExcel, c: C });
                 if (wsMatched[cellTop]) {
                     wsMatched[cellTop].s = {
@@ -135,7 +158,6 @@ export default function ExcelComparer() {
                     };
                 }
 
-                // Стиль нижней границы для последней строки заказа
                 const cellBottom = XLSX.utils.encode_cell({ r: lastRowExcel, c: C });
                 if (wsMatched[cellBottom]) {
                     wsMatched[cellBottom].s = {
@@ -151,7 +173,7 @@ export default function ExcelComparer() {
     }
 
 
-    const wsUnmatched = XLSX.utils.json_to_sheet(unmatched);
+    const wsUnmatched = XLSX.utils.json_to_sheet(filteredUnmatched); // Используем отфильтрованные данные
 
     XLSX.utils.book_append_sheet(wb, wsMatched, 'Совпавшие');
     XLSX.utils.book_append_sheet(wb, wsUnmatched, 'Не совпавшие');
