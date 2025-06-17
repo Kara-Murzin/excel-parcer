@@ -101,8 +101,8 @@ export default function ExcelComparer() {
       "重量", 
       "内部单号", "订单号", "发货时间", "物流方式", "袋号", "分拣人",
       "长宽高", "体积重", "仓库名称", "是否带电", "产品信息",
-      "产品信息sku1", "SKU", "ENGLISH", "Брэнд/изготовитель", "Материал",
-      "Группа товаров", "单品价格цена за 1 вложение(товар) в юанях","Цена поставщика", "__EMPTY"
+      "产品信息sku1", "SKU", "ENGLISH", "Брэнд/изготовитель", "Материал", 
+      "Группа товаров", "单品价格цена за 1 вложение(товар) в юанях","Цена поставщика", "__EMPTY", "链接ССЫЛКА"
     ];
 
     const filterColumns = (dataArray) => {
@@ -122,17 +122,12 @@ export default function ExcelComparer() {
     // === КОНЕЦ ЛОГИКИ УДАЛЕНИЯ СТОЛБЦОВ ===
 
 
-    // === НОВАЯ ЛОГИКА: ОЧИСТКА ЗАГОЛОВКОВ СТОЛБЦОВ ОТ КИТАЙСКИХ СИМВОЛОВ ===
-    // Функция для очистки имени заголовка
+    // === ЛОГИКА: ОЧИСТКА ЗАГОЛОВКОВ СТОЛБЦОВ ОТ КИТАЙСКИХ СИМВОЛОВ ===
     const sanitizeHeaderName = (header) => {
-      // Регулярное выражение:
-      // [^a-zA-Zа-яА-Я0-9\s_.-] - Matches any character NOT an English letter, Russian letter, digit, whitespace, underscore, or hyphen.
-      // g - global flag (find all matches)
-      const sanitized = header.replace(/[^a-zA-Zа-яА-Я0-9\s_.-]/g, ' '); // Заменяем нежелательные символы пробелами
-      return sanitized.replace(/\s+/g, ' ').trim(); // Удаляем лишние пробелы и обрезаем по краям
+      const sanitized = header.replace(/[^a-zA-Zа-яА-Я0-9\s_.-]/g, ' ');
+      return sanitized.replace(/\s+/g, ' ').trim();
     };
 
-    // Функция для применения очистки ко всем ключам в массиве объектов
     const cleanObjectKeys = (dataArray) => {
       return dataArray.map(row => {
         const newRow = {};
@@ -146,20 +141,75 @@ export default function ExcelComparer() {
 
     const finalMatchedData = cleanObjectKeys(filteredMatched);
     const finalUnmatchedData = cleanObjectKeys(filteredUnmatched);
+    // === КОНЕЦ ЛОГИКИ ОЧИСТКИ ЗАГОЛОВКОВ ===
+
+
+    // === НОВАЯ ЛОГИКА: ИЗМЕНЕНИЕ ПОРЯДКА СТОЛБЦОВ ===
+    // *** ОЧЕНЬ ВАЖНО: Заполните этот массив всеми ЗАГОЛОВКАМИ, которые должны остаться,
+    // *** в том порядке, в котором вы хотите их видеть. Используйте ОЧИЩЕННЫЕ названия.
+    // Пример:
+    const customColumnOrder = [
+        "Номер-посылки- накладной",
+        "ФАМИЛИЯ",
+        "ИМЯ",
+        "ОТЧЕСТВО",
+        "АДРЕС",
+        "ГОРОД",
+        "ОБЛАСТЬ",
+        "индекс",
+        "ТЕЛЕФОН",
+        "общ. Количество товаров в посылке накладной",
+        "количество вложений",
+        "наименование на русском",
+        "Цена товара",
+        "Ссылка на товар",
+        "серия паспорта",
+        "номер паспорта",
+        "дата выдачи",
+        "дата рождения",
+        "ИНН",
+        "общий вес вложений",
+        "общий вес посылки",
+        "Контактное лицо (телефон), получатель  в  РОССИИ",
+    ];
+
+    // Функция для получения всех уникальных заголовков из данных
+    const getAllUniqueHeaders = (dataArray) => {
+      const headers = new Set();
+      dataArray.forEach(row => {
+        Object.keys(row).forEach(key => headers.add(key));
+      });
+      return Array.from(headers);
+    };
+
+    // Определяем окончательный порядок заголовков для matched
+    let finalHeadersMatched = [...customColumnOrder];
+    const actualHeadersMatched = getAllUniqueHeaders(finalMatchedData);
+    actualHeadersMatched.forEach(header => {
+      if (!finalHeadersMatched.includes(header)) {
+        finalHeadersMatched.push(header); // Добавляем столбцы, не указанные в customColumnOrder, в конец
+      }
+    });
+
+    // Определяем окончательный порядок заголовков для unmatched (может быть другим, если у них разные наборы столбцов)
+    let finalHeadersUnmatched = [...customColumnOrder];
+    const actualHeadersUnmatched = getAllUniqueHeaders(finalUnmatchedData);
+    actualHeadersUnmatched.forEach(header => {
+      if (!finalHeadersUnmatched.includes(header)) {
+        finalHeadersUnmatched.push(header);
+      }
+    });
     // === КОНЕЦ НОВОЙ ЛОГИКИ ===
 
 
-    // Создаем wsMatched из ОТФИЛЬТРОВАННОГО И ОЧИЩЕННОГО массива
-    const wsMatched = XLSX.utils.json_to_sheet(finalMatchedData, { cellStyles: true });
+    // Создаем wsMatched из ОТФИЛЬТРОВАННОГО И ОЧИЩЕННОГО массива с УКАЗАННЫМ ПОРЯДКОМ ЗАГОЛОВКОВ
+    const wsMatched = XLSX.utils.json_to_sheet(finalMatchedData, { cellStyles: true, header: finalHeadersMatched });
 
     // Теперь получаем диапазон из свежесозданного wsMatched
     const range = wsMatched['!ref'] ? XLSX.utils.decode_range(wsMatched['!ref']) : null;
 
     // Применяем стили (границы)
     if (range) {
-        // Мы используем original orderMap (с индексами в `matched`),
-        // т.к. строки не удалялись, только столбцы и их имена менялись.
-        // Индексы в `orderMap` (0-based) соответствуют строкам в `finalMatchedData`.
         for (const indices of orderMap.values()) {
             const firstRowExcel = indices[0] + 1;
             const lastRowExcel = indices[indices.length - 1] + 1;
@@ -191,7 +241,8 @@ export default function ExcelComparer() {
     }
 
 
-    const wsUnmatched = XLSX.utils.json_to_sheet(finalUnmatchedData); // Используем очищенные данные
+    // Создаем wsUnmatched из ОТФИЛЬТРОВАННОГО И ОЧИЩЕННОГО массива с УКАЗАННЫМ ПОРЯДКОМ ЗАГОЛОВКОВ
+    const wsUnmatched = XLSX.utils.json_to_sheet(finalUnmatchedData, { header: finalHeadersUnmatched });
 
     XLSX.utils.book_append_sheet(wb, wsMatched, 'Совпавшие');
     XLSX.utils.book_append_sheet(wb, wsUnmatched, 'Не совпавшие');
