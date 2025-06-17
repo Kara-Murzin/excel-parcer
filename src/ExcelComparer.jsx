@@ -94,23 +94,21 @@ export default function ExcelComparer() {
     // === КОНЕЦ ЛОГИКИ УДАЛЕНИЯ ДУБЛИКАТОВ ВЕСА ===
 
 
-    // === НОВАЯ ЛОГИКА: УДАЛЕНИЕ СТОЛБЦОВ ПО СПИСКУ ===
+    // === ЛОГИКА: УДАЛЕНИЕ СТОЛБЦОВ ПО СПИСКУ ===
     const columnsToRemove = [
       "收件人", "收件地址", "收件人城市", "收件人州省", "国家简码",
       "收件国家", "寄件国家", "寄件申报品名", "收件申报品名", "海关编码",
-      "重量", // Обратите внимание: у вас есть "包裹重量..." и "重量". Если это одно и то же, оставьте только одно в списке.
+      "重量", 
       "内部单号", "订单号", "发货时间", "物流方式", "袋号", "分拣人",
       "长宽高", "体积重", "仓库名称", "是否带电", "产品信息",
       "产品信息sku1", "SKU", "ENGLISH", "Брэнд/изготовитель", "Материал",
       "Группа товаров", "单品价格цена за 1 вложение(товар) в юанях","Цена поставщика", "__EMPTY"
     ];
 
-    // Функция для фильтрации объектов данных, удаляющая указанные столбцы
     const filterColumns = (dataArray) => {
       return dataArray.map(row => {
         const newRow = {};
         for (const key in row) {
-          // Если ключ не содержится в списке columnsToRemove, добавляем его в новую строку
           if (!columnsToRemove.includes(key)) {
             newRow[key] = row[key];
           }
@@ -121,28 +119,48 @@ export default function ExcelComparer() {
 
     const filteredMatched = filterColumns(matched);
     const filteredUnmatched = filterColumns(unmatched);
+    // === КОНЕЦ ЛОГИКИ УДАЛЕНИЯ СТОЛБЦОВ ===
+
+
+    // === НОВАЯ ЛОГИКА: ОЧИСТКА ЗАГОЛОВКОВ СТОЛБЦОВ ОТ КИТАЙСКИХ СИМВОЛОВ ===
+    // Функция для очистки имени заголовка
+    const sanitizeHeaderName = (header) => {
+      // Регулярное выражение:
+      // [^a-zA-Zа-яА-Я0-9\s_.-] - Matches any character NOT an English letter, Russian letter, digit, whitespace, underscore, or hyphen.
+      // g - global flag (find all matches)
+      const sanitized = header.replace(/[^a-zA-Zа-яА-Я0-9\s_.-]/g, ' '); // Заменяем нежелательные символы пробелами
+      return sanitized.replace(/\s+/g, ' ').trim(); // Удаляем лишние пробелы и обрезаем по краям
+    };
+
+    // Функция для применения очистки ко всем ключам в массиве объектов
+    const cleanObjectKeys = (dataArray) => {
+      return dataArray.map(row => {
+        const newRow = {};
+        for (const key in row) {
+          const newKey = sanitizeHeaderName(key);
+          newRow[newKey] = row[key];
+        }
+        return newRow;
+      });
+    };
+
+    const finalMatchedData = cleanObjectKeys(filteredMatched);
+    const finalUnmatchedData = cleanObjectKeys(filteredUnmatched);
     // === КОНЕЦ НОВОЙ ЛОГИКИ ===
 
 
-    // Создаем wsMatched из ОТФИЛЬТРОВАННОГО массива
-    const wsMatched = XLSX.utils.json_to_sheet(filteredMatched, { cellStyles: true });
+    // Создаем wsMatched из ОТФИЛЬТРОВАННОГО И ОЧИЩЕННОГО массива
+    const wsMatched = XLSX.utils.json_to_sheet(finalMatchedData, { cellStyles: true });
 
     // Теперь получаем диапазон из свежесозданного wsMatched
     const range = wsMatched['!ref'] ? XLSX.utils.decode_range(wsMatched['!ref']) : null;
 
     // Применяем стили (границы)
     if (range) {
-        // Мы должны пересоздать orderMap, основываясь на filteredMatched,
-        // или найти соответствия original_row_index -> filtered_row_index
-        // Но так как мы удаляем столбцы, а не строки, старые индексы (из matched) все еще применимы,
-        // если считать их как индекс в списке (после фильтрации столбцов, порядок строк не меняется)
-        // Единственная проблема: если какая-то строка была удалена из `matched` полностью,
-        // но в вашем случае мы только очищаем поля, не удаляем строки из `matched`.
-        // Поэтому, `orderMap` (с индексами в `matched`) можно использовать напрямую.
+        // Мы используем original orderMap (с индексами в `matched`),
+        // т.к. строки не удалялись, только столбцы и их имена менялись.
+        // Индексы в `orderMap` (0-based) соответствуют строкам в `finalMatchedData`.
         for (const indices of orderMap.values()) {
-            // Конвертируем 0-based индекс из `matched` в 1-based Excel row.
-            // Индексы в `orderMap` ссылаются на исходный `matched` массив,
-            // который имеет ту же последовательность строк, что и `filteredMatched`.
             const firstRowExcel = indices[0] + 1;
             const lastRowExcel = indices[indices.length - 1] + 1;
 
@@ -173,7 +191,7 @@ export default function ExcelComparer() {
     }
 
 
-    const wsUnmatched = XLSX.utils.json_to_sheet(filteredUnmatched); // Используем отфильтрованные данные
+    const wsUnmatched = XLSX.utils.json_to_sheet(finalUnmatchedData); // Используем очищенные данные
 
     XLSX.utils.book_append_sheet(wb, wsMatched, 'Совпавшие');
     XLSX.utils.book_append_sheet(wb, wsUnmatched, 'Не совпавшие');
