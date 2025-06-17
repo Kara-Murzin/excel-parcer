@@ -167,6 +167,59 @@ export default function ExcelComparer() {
     finalUnmatchedData = addColumnCopies(finalUnmatchedData);
     // === КОНЕЦ ЛОГИКИ КОПИРОВАНИЯ СТОЛБЦОВ ===
 
+    // === НОВАЯ ЛОГИКА: СНИЖЕНИЕ ЦЕН И ХРАНЕНИЕ ОРИГИНАЛЬНЫХ СУММ ДЛЯ ПОДСВЕТКИ ===
+    const targetOrderSumValue = 15595; // Целевая сумма, к которой нужно привести заказы
+    const originalOrderSums = new Map(); // orderId -> originalSum (для подсветки)
+    const originalOrderQuantities = new Map(); // orderId -> itemCount (для подсветки)
+
+    // Очищенные названия столбцов для расчетов и модификации
+    const quantityColumn = sanitizeHeaderName("количество вложений");
+    const priceColumn = sanitizeHeaderName("Цена товара");
+    const targetOrderIdColumn = sanitizeHeaderName(targetColumnName); // "Номер посылки накладной"
+
+    // Проходим по каждому заказу (группе строк с одинаковым ID)
+    for (const indices of orderMap.values()) {
+        const orderIdValue = finalMatchedData[indices[0]][targetOrderIdColumn]; // ID текущего заказа
+
+        // 1. Рассчитываем оригинальную сумму для этого заказа (до изменений цен)
+        let currentOriginalOrderSum = 0;
+        for (const originalRowIndex of indices) {
+            const rowData = finalMatchedData[originalRowIndex]; // Получаем данные строки
+            const quantity = parseFloat(rowData[quantityColumn]) || 0;
+            const price = parseFloat(rowData[priceColumn]) || 0;
+            currentOriginalOrderSum += quantity * price;
+        }
+
+        // Сохраняем оригинальные значения для использования в логике подсветки
+        originalOrderSums.set(orderIdValue, currentOriginalOrderSum);
+        originalOrderQuantities.set(orderIdValue, indices.length);
+
+        // 2. Корректируем цены, если оригинальная сумма превышает целевую
+        if (currentOriginalOrderSum > targetOrderSumValue && currentOriginalOrderSum > 0) { // Избегаем деления на 0
+            const reductionFactor = targetOrderSumValue / currentOriginalOrderSum; // Коэффициент снижения
+
+            for (const originalRowIndex of indices) {
+                const rowData = finalMatchedData[originalRowIndex];
+                const quantity = parseFloat(rowData[quantityColumn]) || 0;
+                let currentPrice = parseFloat(rowData[priceColumn]) || 0;
+
+                // Применяем коэффициент снижения только если цена и количество больше 0
+                if (quantity > 0 && currentPrice > 0) {
+                    let newPrice = currentPrice * reductionFactor;
+                    
+                    // Убеждаемся, что цена не станет меньше 0.01 (или другого минимального значения)
+                    // Округляем цену до ближайшего целого числа
+                    // Math.max(1, ...) гарантирует, что цена будет минимум 1, если она была положительной
+                    rowData[priceColumn] = Math.max(1, Math.round(newPrice)); // Обновляем цену в данных, делаем целой
+                } else if (quantity === 0 && currentPrice > 0) {
+                    // Если количество 0, но цена есть, это не влияет на общую сумму "кол-во * цена"
+                    // В этом случае цена не корректируется, т.к. она не вносит вклад в orderSum
+                }
+            }
+        }
+    }
+    // === КОНЕЦ ЛОГИКИ СНИЖЕНИЯ ЦЕН ===
+
 
     // === ЛОГИКА: ИЗМЕНЕНИЕ ПОРЯДКА СТОЛБЦОВ ===
     const customColumnOrder = [
@@ -221,44 +274,31 @@ export default function ExcelComparer() {
 
 
     // Создаем wsMatched из ОТФИЛЬТРОВАННОГО, ОЧИЩЕННОГО И СКОПИРОВАННОГО массива с УКАЗАННЫМ ПОРЯДКОМ ЗАГОЛОВКОВ
+    // finalMatchedData здесь уже содержит скорректированные цены
     const wsMatched = XLSX.utils.json_to_sheet(finalMatchedData, { cellStyles: true, header: finalHeadersMatched });
 
     const range = wsMatched['!ref'] ? XLSX.utils.decode_range(wsMatched['!ref']) : null;
 
-    // === НОВАЯ ЛОГИКА: ПОДСВЕТКА ЗАКАЗОВ ===
+    // === ЛОГИКА: ПОДСВЕТКА ЗАКАЗОВ (использует оригинальные суммы для условий) ===
     const highlightByCountColor = { rgb: "FFFF99" }; // Светло-желтый для количества товаров > 5
     const highlightByValueColor = { rgb: "FFCC00" }; // Оранжевый для суммы заказа > 16000
-
-    // Очищенные названия столбцов для расчетов
-    const quantityColumn = sanitizeHeaderName("количество вложений");
-    const priceColumn = sanitizeHeaderName("Цена товара");
-
 
     if (range) {
         // Проходим по orderMap для применения стилей
         for (const indices of orderMap.values()) {
-            const itemCount = indices.length; // Количество строк (товаров) для текущего заказа
+            const orderIdValue = finalMatchedData[indices[0]][targetOrderIdColumn]; // ID текущего заказа
 
-            // Высчитываем общую сумму заказа
-            let orderSum = 0;
-            for (const originalRowIndex of indices) {
-                // Получаем данные строки из finalMatchedData по ее индексу
-                const rowData = finalMatchedData[originalRowIndex];
-                
-                // Парсим значения как числа, приводим к 0, если не число
-                const quantity = parseFloat(rowData[quantityColumn]) || 0;
-                const price = parseFloat(rowData[priceColumn]) || 0;
-                
-                orderSum += quantity * price;
-            }
+            // Используем сохраненные оригинальные значения для условий подсветки
+            const itemCount = originalOrderQuantities.get(orderIdValue) || 0;
+            const currentOriginalOrderSum = originalOrderSums.get(orderIdValue) || 0;
 
             // Определяем, какие условия подсветки выполнены
             const shouldHighlightByCount = itemCount > 5;
-            const shouldHighlightByValue = orderSum > 16000;
+            const shouldHighlightByValue = currentOriginalOrderSum > 16000; // Условие > 16000, не 15590
 
             let currentHighlightColor = null;
 
-            // Приоритет: если сумма заказа большая, используем оранжевый цвет
+            // Приоритет: если оригинальная сумма заказа большая, используем оранжевый цвет
             if (shouldHighlightByValue) {
                 currentHighlightColor = highlightByValueColor;
             } 
@@ -306,7 +346,7 @@ export default function ExcelComparer() {
             }
         }
     }
-    // === КОНЕЦ НОВОЙ ЛОГИКИ ===
+    // === КОНЕЦ ЛОГИКИ ПОДСВЕТКИ ===
 
 
     // Создаем wsUnmatched - для этого листа подсветка не требуется по заданию
