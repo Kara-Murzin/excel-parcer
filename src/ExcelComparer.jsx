@@ -225,51 +225,79 @@ export default function ExcelComparer() {
 
     const range = wsMatched['!ref'] ? XLSX.utils.decode_range(wsMatched['!ref']) : null;
 
-    // === НОВАЯ ЛОГИКА: ПОДСВЕТКА ЗАКАЗОВ С КОЛИЧЕСТВОМ ТОВАРОВ БОЛЬШЕ 5 ===
-    const highlightColor = { rgb: "FFFF99" }; 
+    // === НОВАЯ ЛОГИКА: ПОДСВЕТКА ЗАКАЗОВ ===
+    const highlightByCountColor = { rgb: "FFFF99" }; // Светло-желтый для количества товаров > 5
+    const highlightByValueColor = { rgb: "FFCC00" }; // Оранжевый для суммы заказа > 16000
+
+    // Очищенные названия столбцов для расчетов
+    const quantityColumn = sanitizeHeaderName("количество вложений");
+    const priceColumn = sanitizeHeaderName("Цена товара");
+
 
     if (range) {
-        // Проходим по orderMap, чтобы применить стили
+        // Проходим по orderMap для применения стилей
         for (const indices of orderMap.values()) {
             const itemCount = indices.length; // Количество строк (товаров) для текущего заказа
 
-            // Определяем, нужно ли подсвечивать этот заказ
-            const shouldHighlight = itemCount > 5;
+            // Высчитываем общую сумму заказа
+            let orderSum = 0;
+            for (const originalRowIndex of indices) {
+                // Получаем данные строки из finalMatchedData по ее индексу
+                const rowData = finalMatchedData[originalRowIndex];
+                
+                // Парсим значения как числа, приводим к 0, если не число
+                const quantity = parseFloat(rowData[quantityColumn]) || 0;
+                const price = parseFloat(rowData[priceColumn]) || 0;
+                
+                orderSum += quantity * price;
+            }
 
+            // Определяем, какие условия подсветки выполнены
+            const shouldHighlightByCount = itemCount > 5;
+            const shouldHighlightByValue = orderSum > 16000;
+
+            let currentHighlightColor = null;
+
+            // Приоритет: если сумма заказа большая, используем оранжевый цвет
+            if (shouldHighlightByValue) {
+                currentHighlightColor = highlightByValueColor;
+            } 
+            // Иначе, если товаров много, используем светло-желтый
+            else if (shouldHighlightByCount) {
+                currentHighlightColor = highlightByCountColor;
+            }
+            
             // Индексы строк в Excel (1-based), принадлежащих текущему заказу
-            // indices содержат 0-based индексы в `matched` массиве,
-            // который сохранил свой порядок в `finalMatchedData`.
             const firstRowExcel = indices[0] + 1;
             const lastRowExcel = indices[indices.length - 1] + 1;
 
             // Применяем стили ко всем ячейкам в строках этого заказа
-            for (let R = firstRowExcel; R <= lastRowExcel; ++R) { // Итерируем по Excel-строкам
-                for (let C = range.s.c; C <= range.e.c; ++C) { // Итерируем по всем Excel-столбцам
+            for (let R = firstRowExcel; R <= lastRowExcel; ++R) {
+                for (let C = range.s.c; C <= range.e.c; ++C) {
                     const cellRef = XLSX.utils.encode_cell({ r: R, c: C });
                     const cell = wsMatched[cellRef];
 
                     if (cell) {
-                        if (!cell.s) cell.s = {}; // Убедимся, что объект стиля 's' существует
+                        if (!cell.s) cell.s = {};
 
-                        // Применяем фоновую заливку, если нужно
-                        if (shouldHighlight) {
+                        // Применяем фоновую заливку, если цвет определен
+                        if (currentHighlightColor) {
                             cell.s.fill = {
-                                fgColor: highlightColor,
+                                fgColor: currentHighlightColor,
                                 patternType: "solid"
                             };
                         }
 
                         // Сохраняем логику границ (верхняя для первой строки, нижняя для последней)
-                        // Это важно, чтобы подсветка не перезаписала границы.
                         if (R === firstRowExcel) {
                             cell.s.border = {
-                                ...(cell.s.border || {}), // Сохраняем существующие стили границ
+                                ...(cell.s.border || {}),
                                 top: borderStyle
                             };
                         }
                         if (R === lastRowExcel) {
                             cell.s.border = {
-                                ...(cell.s.border || {}), // Сохраняем существующие стили границ
+                                ...(cell.s.border || {}),
                                 bottom: borderStyle
                             };
                         }
