@@ -312,8 +312,6 @@ export default function ExcelComparer() {
     // === НОВАЯ ЛОГИКА: СНИЖЕНИЕ ЦЕН И ХРАНЕНИЕ ОРИГИНАЛЬНЫХ СУММ ДЛЯ ПОДСВЕТКИ ===
     const targetOrderSumValue = 15595; // Целевая сумма, к которой нужно привести заказы
     const originalOrderSums = new Map(); // orderId -> originalSum (для подсветки)
-    // const originalOrderQuantities = new Map(); // Это больше не нужно для подсветки по количеству товаров
-    // Удаляем originalOrderQuantities из-за его ненужности для новой логики
 
     // Проходим по каждому заказу (группе строк с одинаковым ID)
     for (const indices of orderMapForProcessing.values()) { // Используем orderMapForProcessing
@@ -330,7 +328,6 @@ export default function ExcelComparer() {
 
         // Сохраняем оригинальные значения для использования в логике подсветки
         originalOrderSums.set(orderIdValue, currentOriginalOrderSum);
-        // originalOrderQuantities.set(orderIdValue, indices.length); // Удаляем эту строку
 
         // 2. Корректируем цены, если оригинальная сумма превышает целевую
         if (currentOriginalOrderSum > targetOrderSumValue && currentOriginalOrderSum > 0) {
@@ -426,44 +423,73 @@ export default function ExcelComparer() {
             }
         }
 
-        // Проходим по ВСЕМ строкам в finalMatchedData
-        for (let R = range.s.r + 1; R <= range.e.r; ++R) { // Начинаем с 1-й строки данных (после заголовков)
-            const rowIndexInData = R - 1; // Индекс в массиве данных (0-based)
+        // В этом Map будем хранить цвета, которые уже были применены к каждой ячейке.
+        // Это позволит избежать перезаписи высокоприоритетного цвета низкоприоритетным.
+        const cellColors = new Map(); // Key: cellRef (e.g., "A1"), Value: color (e.g., highlightByValueColor)
+
+        // *** ИЗМЕНЕННАЯ ЛОГИКА ПРИОРИТЕТА: Сначала применяем ЖЕЛТЫЙ, затем ОРАНЖЕВЫЙ, но только если ячейка еще не ЖЕЛТАЯ ***
+
+        // 1. Проходим по ВСЕМ строкам и сначала применяем светло-желтый цвет
+        for (let R = range.s.r + 1; R <= range.e.r; ++R) { 
+            const rowIndexInData = R - 1; 
             const rowData = finalMatchedData[rowIndexInData];
+            if (!rowData) continue;
 
-            if (!rowData) continue; // Пропустить, если строка данных отсутствует
+            const itemQuantity = parseFloat(rowData[itemQuantityColumn]) || 0;
 
-            const orderIdValue = rowData[targetOrderIdColumn];
-            const itemQuantity = parseFloat(rowData[itemQuantityColumn]) || 0; // Количество вложений для текущей строки
-
-            let currentHighlightColor = null;
-
-            // Если заказ должен быть оранжевым, то вся строка должна быть оранжевой, игнорируя другие условия
-            if (ordersToHighlightOrange.has(orderIdValue)) {
-                currentHighlightColor = highlightByValueColor;
-            } 
-            // Иначе, если количество вложений в ТЕКУЩЕЙ строке > 5, используем светло-желтый
-            else if (itemQuantity > 5) {
-                currentHighlightColor = highlightByQuantityColor;
-            }
-
-            // Применяем найденный цвет к ячейкам текущей строки
-            if (currentHighlightColor) {
+            if (itemQuantity > 5) {
                 for (let C = range.s.c; C <= range.e.c; ++C) {
                     const cellRef = XLSX.utils.encode_cell({ r: R, c: C });
                     const cell = wsMatched[cellRef];
                     if (cell) {
                         if (!cell.s) cell.s = {};
                         cell.s.fill = {
-                            fgColor: currentHighlightColor,
+                            fgColor: highlightByQuantityColor,
                             patternType: "solid"
                         };
+                        cellColors.set(cellRef, highlightByQuantityColor); // Записываем, что эта ячейка желтая
                     }
                 }
             }
+        }
 
-            // Логика границ (верхняя для первой строки заказа, нижняя для последней)
+        // 2. Затем, проходим снова, чтобы применить ОРАНЖЕВЫЙ, но только если ячейка еще НЕ БЫЛА окрашена в светло-желтый
+        for (let R = range.s.r + 1; R <= range.e.r; ++R) { 
+            const rowIndexInData = R - 1; 
+            const rowData = finalMatchedData[rowIndexInData];
+            if (!rowData) continue;
+
+            const orderIdValue = rowData[targetOrderIdColumn];
+
+            // Применяем оранжевый, только если заказ должен быть оранжевым И ячейка еще не желтая
+            if (ordersToHighlightOrange.has(orderIdValue)) {
+                for (let C = range.s.c; C <= range.e.c; ++C) {
+                    const cellRef = XLSX.utils.encode_cell({ r: R, c: C });
+                    // Проверяем, был ли уже применен светло-желтый цвет к этой ячейке
+                    if (!cellColors.has(cellRef) || cellColors.get(cellRef).rgb !== highlightByQuantityColor.rgb) {
+                        const cell = wsMatched[cellRef];
+                        if (cell) {
+                            if (!cell.s) cell.s = {};
+                            cell.s.fill = {
+                                fgColor: highlightByValueColor,
+                                patternType: "solid"
+                            };
+                            cellColors.set(cellRef, highlightByValueColor); // Записываем, что эта ячейка оранжевая
+                        }
+                    }
+                }
+            }
+        }
+
+        // Логика границ (выполняется отдельно, чтобы не влиять на заливку)
+        for (let R = range.s.r + 1; R <= range.e.r; ++R) {
+            const rowIndexInData = R - 1;
+            const rowData = finalMatchedData[rowIndexInData];
+            if (!rowData) continue;
+
+            const orderIdValue = rowData[targetOrderIdColumn];
             const indicesForCurrentOrder = orderMapForProcessing.get(orderIdValue);
+
             if (indicesForCurrentOrder) {
                 const isFirstRowOfOrder = rowIndexInData === indicesForCurrentOrder[0];
                 const isLastRowOfOrder = rowIndexInData === indicesForCurrentOrder[indicesForCurrentOrder.length - 1];
