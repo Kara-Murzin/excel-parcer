@@ -17,6 +17,10 @@ export default function ExcelComparer() {
   const [newItemLink, setNewItemLink] = useState('');
   const [newItemWeight, setNewItemWeight] = useState(''); // Общий вес вложений нового товара
 
+  // НОВЫЕ СОСТОЯНИЯ ДЛЯ ДОПОЛНИТЕЛЬНЫХ ПОЛЕЙ
+  const [newIndexInputValue, setNewIndexInputValue] = useState('');
+  const [newContactPersonInputValue, setNewContactPersonInputValue] = useState('');
+
   const handleFileUpload = async (file, setWb, setSheet) => {
     const data = await file.arrayBuffer();
     const workbook = XLSX.read(data);
@@ -290,6 +294,22 @@ export default function ExcelComparer() {
     }
     // === КОНЕЦ ПОВТОРНОЙ ЛОГИКИ УДАЛЕНИЯ ДУБЛИКАТОВ ОБЩЕГО ВЕСА ПОСЫЛКИ ===
 
+    // === ЛОГИКА: ОБНОВЛЕНИЕ ДОПОЛНИТЕЛЬНЫХ ПОЛЕЙ "индекс" и "Контактное лицо" ===
+    const indexColumn = sanitizeHeaderName("индекс");
+    const contactPersonColumn = sanitizeHeaderName("Контактное лицо (телефон), получатель в РОССИИ");
+
+    // Применяем значения из новых инпутов ко ВСЕМ строкам в finalMatchedData
+    if (newIndexInputValue !== '') {
+        finalMatchedData.forEach(row => {
+            row[indexColumn] = newIndexInputValue;
+        });
+    }
+    if (newContactPersonInputValue !== '') {
+        finalMatchedData.forEach(row => {
+            row[contactPersonColumn] = newContactPersonInputValue;
+        });
+    }
+    // === КОНЕЦ ЛОГИКИ ОБНОВЛЕНИЯ ДОПОЛНИТЕЛЬНЫХ ПОЛЕЙ ===
 
     // === НОВАЯ ЛОГИКА: СНИЖЕНИЕ ЦЕН И ХРАНЕНИЕ ОРИГИНАЛЬНЫХ СУММ ДЛЯ ПОДСВЕТКИ ===
     const targetOrderSumValue = 15595; // Целевая сумма, к которой нужно привести заказы
@@ -364,7 +384,7 @@ export default function ExcelComparer() {
         "ИНН",
         "общий вес вложений",
         "общий вес посылки",
-        sanitizeHeaderName("Контактное лицо (телефон), получатель  в  РОССИИ"),
+        sanitizeHeaderName("Контактное лицо (телефон), получатель в РОССИИ"),
     ];
 
     const getAllUniqueHeaders = (dataArray) => {
@@ -480,79 +500,99 @@ export default function ExcelComparer() {
   return (
     <div style={{ padding: '2rem' }}>
       <h2>Сравнение Excel по выбранным листам</h2>
-
-      <div>
-        <label>Файл 1 (реестр): </label>
-        <input
-          type="file"
-          accept=".xlsx, .xls"
-          onChange={e => {
-            const file = e.target.files[0];
-            setFile1(file);
-            handleFileUpload(file, setWb1, setSheet1);
-          }}
-        />
-        {wb1 && (
-          <select value={sheet1} onChange={e => setSheet1(e.target.value)}>
-            {wb1.SheetNames.map(name => (
-              <option key={name} value={name}>
-                {name}
-              </option>
-            ))}
-          </select>
-        )}
+      {/* Форма для выбора файлов */}
+      <div style={{ marginTop: '2rem', border: '1px solid #a3e635', padding: '1rem', borderRadius: '8px' }}>
+          <div style={{ display: 'flex', flexDirection: 'column' }}>
+            <div>
+              <label>Файл 1 (реестр): </label>
+              <input
+                type="file"
+                accept=".xlsx, .xls"
+                onChange={e => {
+                  const file = e.target.files[0];
+                  setFile1(file);
+                  handleFileUpload(file, setWb1, setSheet1);
+                }}
+              />
+              {wb1 && (
+                <select value={sheet1} onChange={e => setSheet1(e.target.value)}>
+                  {wb1.SheetNames.map(name => (
+                    <option key={name} value={name}>
+                      {name}
+                    </option>
+                  ))}
+                </select>
+              )}
+            </div>
+            <div style={{marginTop: '2rem'}}>
+              <label>Файл 2 (заказы): </label>
+              <input
+                type="file"
+                accept=".xlsx, .xls"
+                onChange={e => {
+                  const file = e.target.files[0];
+                  setFile2(file);
+                  handleFileUpload(file, setWb2, setSheet2);
+                }}
+              />
+              {wb2 && (
+                <select value={sheet2} onChange={e => setSheet2(e.target.value)}>
+                  {wb2.SheetNames.map(name => (
+                    <option key={name} value={name}>
+                      {name}
+                    </option>
+                  ))}
+                </select>
+              )}
+            </div>
+        </div>
       </div>
-
-      <div style={{ marginTop: '1rem' }}>
-        <label>Файл 2 (заказы): </label>
-        <input
-          type="file"
-          accept=".xlsx, .xls"
-          onChange={e => {
-            const file = e.target.files[0];
-            setFile2(file);
-            handleFileUpload(file, setWb2, setSheet2);
-          }}
-        />
-        {wb2 && (
-          <select value={sheet2} onChange={e => setSheet2(e.target.value)}>
-            {wb2.SheetNames.map(name => (
-              <option key={name} value={name}>
-                {name}
-              </option>
-            ))}
-          </select>
-        )}
-      </div>
-
+      
       {/* Форма для добавления нового товара */}
-      <div style={{ marginTop: '2rem', border: '1px solid #ccc', padding: '1rem', borderRadius: '8px' }}>
+      <div style={{ marginTop: '2rem', border: '1px solid #a3e635', padding: '1rem', borderRadius: '8px' }}>
           <h3>Данные для нового товара (добавится к каждому заказу)</h3>
           <div style={{ display: 'flex', flexDirection: 'column' }}>
               <div style={{ marginBottom: '1rem'}}>
                   <label style={{ display: 'block', marginBottom: '5px' }}>Название товара (на русском):</label>
                   <input type="text" value={newItemName} onChange={e => setNewItemName(e.target.value)} 
-                         style={{ width: '90%', padding: '1rem', borderRadius: '4px', border: '1px solid #ddd' }} />
+                         style={{ width: '90%', padding: '8px', borderRadius: '4px', border: '1px solid #ddd' }} />
               </div>
               <div style={{ marginBottom: '1rem'}}>
                   <label style={{ display: 'block', marginBottom: '5px' }}>Количество вложений (нового товара):</label>
                   <input type="number" value={newItemQuantity} onChange={e => setNewItemQuantity(e.target.value)} 
-                         style={{ width: '90%', padding: '1rem', borderRadius: '4px', border: '1px solid #ddd' }} />
+                         style={{ width: '90%', padding: '8px', borderRadius: '4px', border: '1px solid #ddd' }} />
               </div>
               <div style={{ marginBottom: '1rem'}}>
                   <label style={{ display: 'block', marginBottom: '5px' }}>Цена товара (нового товара):</label>
                   <input type="number" step="1" value={newItemPrice} onChange={e => setNewItemPrice(e.target.value)} 
-                         style={{ width: '90%', padding: '1rem', borderRadius: '4px', border: '1px solid #ddd' }} />
+                         style={{ width: '90%', padding: '8px', borderRadius: '4px', border: '1px solid #ddd' }} />
               </div>
               <div style={{ marginBottom: '1rem'}}>
                   <label style={{ display: 'block', marginBottom: '5px' }}>Ссылка на товар (нового товара):</label>
                   <input type="text" value={newItemLink} onChange={e => setNewItemLink(e.target.value)} 
-                         style={{ width: '90%', padding: '1rem', borderRadius: '4px', border: '1px solid #ddd' }} />
+                         style={{ width: '90%', padding: '8px', borderRadius: '4px', border: '1px solid #ddd' }} />
               </div>
               <div style={{ marginBottom: '1rem'}}>
                   <label style={{ display: 'block', marginBottom: '5px' }}>Вес нового вложения (для "общий вес вложений"):</label>
                   <input type="number" step="0.01" value={newItemWeight} onChange={e => setNewItemWeight(e.target.value)} 
-                         style={{ width: '90%', padding: '1rem', borderRadius: '4px', border: '1px solid #ddd' }} />
+                         style={{ width: '90%', padding: '8px', borderRadius: '4px', border: '1px solid #ddd' }} />
+              </div>
+          </div>
+      </div>
+
+      {/* НОВЫЙ БЛОК ВВОДА ДАННЫХ ДЛЯ ВСЕХ СТРОК */}
+      <div style={{ marginTop: '2rem', border: '1px solid #a3e635', padding: '1rem', borderRadius: '8px' }}>
+          <h3>Дополнительные данные для всех строк</h3>
+          <div style={{ display: 'flex', flexDirection:'column', gap: '15px', maxWidth: '700px' }}>
+              <div>
+                  <label style={{ display: 'block', marginBottom: '5px' }}>Индекс:</label>
+                  <input type="text" value={newIndexInputValue} onChange={e => setNewIndexInputValue(e.target.value)} 
+                         style={{ width: '90%', padding: '8px', borderRadius: '4px', border: '1px solid #a3e635' }} />
+              </div>
+              <div>
+                  <label style={{ display: 'block', marginBottom: '5px' }}>Контактное лицо (телефон), получатель в РОССИИ:</label>
+                  <input type="text" value={newContactPersonInputValue} onChange={e => setNewContactPersonInputValue(e.target.value)} 
+                         style={{ width: '90%', padding: '8px', borderRadius: '4px', border: '1px solid #a3e635' }} />
               </div>
           </div>
       </div>
