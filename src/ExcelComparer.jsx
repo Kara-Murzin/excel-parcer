@@ -312,7 +312,8 @@ export default function ExcelComparer() {
     // === НОВАЯ ЛОГИКА: СНИЖЕНИЕ ЦЕН И ХРАНЕНИЕ ОРИГИНАЛЬНЫХ СУММ ДЛЯ ПОДСВЕТКИ ===
     const targetOrderSumValue = 15595; // Целевая сумма, к которой нужно привести заказы
     const originalOrderSums = new Map(); // orderId -> originalSum (для подсветки)
-    const originalOrderQuantities = new Map(); // orderId -> itemCount (для подсветки)
+    // const originalOrderQuantities = new Map(); // Это больше не нужно для подсветки по количеству товаров
+    // Удаляем originalOrderQuantities из-за его ненужности для новой логики
 
     // Проходим по каждому заказу (группе строк с одинаковым ID)
     for (const indices of orderMapForProcessing.values()) { // Используем orderMapForProcessing
@@ -329,7 +330,7 @@ export default function ExcelComparer() {
 
         // Сохраняем оригинальные значения для использования в логике подсветки
         originalOrderSums.set(orderIdValue, currentOriginalOrderSum);
-        originalOrderQuantities.set(orderIdValue, indices.length);
+        // originalOrderQuantities.set(orderIdValue, indices.length); // Удаляем эту строку
 
         // 2. Корректируем цены, если оригинальная сумма превышает целевую
         if (currentOriginalOrderSum > targetOrderSumValue && currentOriginalOrderSum > 0) {
@@ -410,12 +411,21 @@ export default function ExcelComparer() {
 
     const range = wsMatched['!ref'] ? XLSX.utils.decode_range(wsMatched['!ref']) : null;
 
-    // === ЛОГИКА: ПОДСВЕТКА ЗАКАЗОВ (использует оригинальные суммы для условий) ===
-    // УДАЛЯЕМ highlightByCountColor и shouldHighlightByCount
+    // === ЛОГИКА: ПОДСВЕТКА ЗАКАЗОВ ===
     const highlightByValueColor = { rgb: "FFCC00" }; // Оранжевый для суммы заказа > 16000
-    const highlightByQuantityColor = { rgb: "FFFF99" }; // Светло-желтый для "количество вложений" > 5 (НОВОЕ)
+    const highlightByQuantityColor = { rgb: "FFFF99" }; // Светло-желтый для "количество вложений" > 5
 
     if (range) {
+        // Сначала определим, какие заказы должны быть оранжевыми
+        const ordersToHighlightOrange = new Set();
+        for (const indices of orderMapForProcessing.values()) {
+            const orderIdValue = finalMatchedData[indices[0]][targetOrderIdColumn];
+            const currentOriginalOrderSum = originalOrderSums.get(orderIdValue) || 0;
+            if (currentOriginalOrderSum > 16000) {
+                ordersToHighlightOrange.add(orderIdValue);
+            }
+        }
+
         // Проходим по ВСЕМ строкам в finalMatchedData
         for (let R = range.s.r + 1; R <= range.e.r; ++R) { // Начинаем с 1-й строки данных (после заголовков)
             const rowIndexInData = R - 1; // Индекс в массиве данных (0-based)
@@ -424,42 +434,21 @@ export default function ExcelComparer() {
             if (!rowData) continue; // Пропустить, если строка данных отсутствует
 
             const orderIdValue = rowData[targetOrderIdColumn];
-            const currentOriginalOrderSum = originalOrderSums.get(orderIdValue) || 0; // Сумма заказа для текущей строки
             const itemQuantity = parseFloat(rowData[itemQuantityColumn]) || 0; // Количество вложений для текущей строки
-
-            // Определяем, какие условия подсветки выполнены для ТЕКУЩЕЙ СТРОКИ
-            const shouldHighlightByValue = currentOriginalOrderSum > 16000; // Условие > 16000
-            const shouldHighlightByQuantity = itemQuantity > 5; // НОВОЕ УСЛОВИЕ: количество вложений > 5
 
             let currentHighlightColor = null;
 
-            // Приоритет: если оригинальная сумма заказа большая, используем оранжевый цвет для всей строки заказа
-            if (shouldHighlightByValue) {
+            // Если заказ должен быть оранжевым, то вся строка должна быть оранжевой, игнорируя другие условия
+            if (ordersToHighlightOrange.has(orderIdValue)) {
                 currentHighlightColor = highlightByValueColor;
-                // Если оранжевый цвет, то вся строка заказа должна быть оранжевой.
-                // Находим все строки для этого заказа и применяем оранжевый.
-                const indicesForThisOrder = orderMapForProcessing.get(orderIdValue);
-                if (indicesForThisOrder) {
-                    for (const idx of indicesForThisOrder) {
-                        const excelRow = idx + 1; // Excel row is 1-based
-                        for (let C = range.s.c; C <= range.e.c; ++C) {
-                            const cellRef = XLSX.utils.encode_cell({ r: excelRow, c: C });
-                            const cell = wsMatched[cellRef];
-                            if (cell) {
-                                if (!cell.s) cell.s = {};
-                                cell.s.fill = {
-                                    fgColor: highlightByValueColor,
-                                    patternType: "solid"
-                                };
-                            }
-                        }
-                    }
-                }
             } 
             // Иначе, если количество вложений в ТЕКУЩЕЙ строке > 5, используем светло-желтый
-            else if (shouldHighlightByQuantity) {
+            else if (itemQuantity > 5) {
                 currentHighlightColor = highlightByQuantityColor;
-                // Применяем желтый только к ТЕКУЩЕЙ строке
+            }
+
+            // Применяем найденный цвет к ячейкам текущей строки
+            if (currentHighlightColor) {
                 for (let C = range.s.c; C <= range.e.c; ++C) {
                     const cellRef = XLSX.utils.encode_cell({ r: R, c: C });
                     const cell = wsMatched[cellRef];
@@ -474,8 +463,6 @@ export default function ExcelComparer() {
             }
 
             // Логика границ (верхняя для первой строки заказа, нижняя для последней)
-            // Эту часть нужно применять для всего заказа, независимо от подсветки.
-            // Найдем, является ли текущая строка первой или последней в своем заказе.
             const indicesForCurrentOrder = orderMapForProcessing.get(orderIdValue);
             if (indicesForCurrentOrder) {
                 const isFirstRowOfOrder = rowIndexInData === indicesForCurrentOrder[0];
