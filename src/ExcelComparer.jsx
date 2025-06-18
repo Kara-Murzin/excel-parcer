@@ -437,7 +437,7 @@ export default function ExcelComparer() {
 
             const itemQuantity = parseFloat(rowData[itemQuantityColumn]) || 0;
 
-            if (itemQuantity > 5) {
+            if (itemQuantity >= 5) {
                 for (let C = range.s.c; C <= range.e.c; ++C) {
                     const cellRef = XLSX.utils.encode_cell({ r: R, c: C });
                     const cell = wsMatched[cellRef];
