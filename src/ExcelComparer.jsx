@@ -10,6 +10,13 @@ export default function ExcelComparer() {
   const [wb2, setWb2] = useState(null);
   const [sheet2, setSheet2] = useState('');
 
+  // Состояния для полей формы нового товара
+  const [newItemName, setNewItemName] = useState('');
+  const [newItemQuantity, setNewItemQuantity] = useState(''); // Количество вложений нового товара
+  const [newItemPrice, setNewItemPrice] = useState('');
+  const [newItemLink, setNewItemLink] = useState('');
+  const [newItemWeight, setNewItemWeight] = useState(''); // Общий вес вложений нового товара
+
   const handleFileUpload = async (file, setWb, setSheet) => {
     const data = await file.arrayBuffer();
     const workbook = XLSX.read(data);
@@ -54,45 +61,42 @@ export default function ExcelComparer() {
       color: { rgb: "000000" }
     };
 
-    // === ЛОГИКА УДАЛЕНИЯ ДУБЛИКАТОВ ВЕСА ===
-    const columns = Object.keys(sheetData1[0] || {});
-    const weightColumnName = "包裹重量一个包裹一次备注就行общий вес посылки";
-
-    if (!columns.includes(weightColumnName)) {
-      alert(`Колонка "${weightColumnName}" не найдена в файле.`);
-      return;
+    // === ЛОГИКА УДАЛЕНИЯ ДУБЛИКАТОВ ВЕСА (Первичное прохождение до всех модификаций) ===
+    // Эта логика применяется к исходным данным `matched`, чтобы обработать
+    // дубликаты, которые могли присутствовать изначально в загруженном файле.
+    const initialWeightColumnName = "包裹重量一个包裹一次备注就行общий вес посылки"; // Оригинальное название
+    if (!Object.keys(sheetData1[0] || {}).includes(initialWeightColumnName)) {
+        alert(`Колонка "${initialWeightColumnName}" не найдена в файле.`);
+        return;
     }
     
-    // orderMap теперь будет содержать 0-based индексы строк matched
-    const orderMap = new Map();
+    const preModificationOrderMap = new Map();
     for (let i = 0; i < matched.length; ++i) {
-      const rowObj = matched[i];
-      const orderId = rowObj?.[targetColumnName];
-
-      if (orderId !== undefined && orderId !== null && orderId !== '') {
-        if (!orderMap.has(orderId)) {
-          orderMap.set(orderId, []);
+        const rowObj = matched[i];
+        const orderId = rowObj?.[targetColumnName];
+        if (orderId !== undefined && orderId !== null && orderId !== '') {
+            if (!preModificationOrderMap.has(orderId)) {
+                preModificationOrderMap.set(orderId, []);
+            }
+            preModificationOrderMap.get(orderId).push(i);
         }
-        orderMap.get(orderId).push(i); // Сохраняем индекс строки в массиве matched
-      }
     }
 
-    for (const indices of orderMap.values()) {
-      if (indices.length <= 1) continue;
+    for (const indices of preModificationOrderMap.values()) {
+        if (indices.length <= 1) continue;
 
-      const firstRowIndexInMatched = indices[0];
-      const firstWeight = normalize(matched[firstRowIndexInMatched]?.[weightColumnName]);
+        const firstRowIndexInOrder = indices[0];
+        const firstWeight = normalize(matched[firstRowIndexInOrder]?.[initialWeightColumnName]);
 
-      for (let i = 1; i < indices.length; ++i) {
-        const currentRowIndexInMatched = indices[i];
-        const row = matched[currentRowIndexInMatched];
-
-        if (normalize(row?.[weightColumnName]) === firstWeight) {
-          row[weightColumnName] = '';
+        for (let i = 1; i < indices.length; ++i) {
+            const currentRowIndexInOrder = indices[i];
+            const row = matched[currentRowIndexInOrder];
+            if (normalize(row?.[initialWeightColumnName]) === firstWeight) {
+                row[initialWeightColumnName] = '';
+            }
         }
-      }
     }
-    // === КОНЕЦ ЛОГИКИ УДАЛЕНИЯ ДУБЛИКАТОВ ВЕСА ===
+    // === КОНЕЦ ЛОГИКИ УДАЛЕНИЯ ДУБЛИКАТОВ ВЕСА (Первичное прохождение) ===
 
 
     // === ЛОГИКА: УДАЛЕНИЕ СТОЛБЦОВ ПО СПИСКУ ===
@@ -167,26 +171,143 @@ export default function ExcelComparer() {
     finalUnmatchedData = addColumnCopies(finalUnmatchedData);
     // === КОНЕЦ ЛОГИКИ КОПИРОВАНИЯ СТОЛБЦОВ ===
 
+
+    // === НОВАЯ ЛОГИКА: ДОБАВЛЕНИЕ СТРОК ИЗ ФОРМЫ И ОБНОВЛЕНИЕ СУЩЕСТВУЮЩИХ ПОЛЕЙ ===
+    const processedMatchedData = []; // Новый массив для сборки всех строк
+    
+    // Очищенные названия столбцов, которые будут использоваться
+    const totalItemsColumn = sanitizeHeaderName("общ. Количество товаров в посылке (накладной)");
+    const totalWeightColumn = sanitizeHeaderName("общий вес посылки"); // Это поле теперь будет перезаписано
+    const itemNameColumn = sanitizeHeaderName("наименование на русском");
+    const itemQuantityColumn = sanitizeHeaderName("количество вложений");
+    const itemPriceColumn = sanitizeHeaderName("Цена товара");
+    const itemLinkColumn = sanitizeHeaderName("Ссылка на товар");
+    const itemWeightColumn = sanitizeHeaderName("общий вес вложений"); // Вес для отдельного вложения
+    const targetOrderIdColumn = sanitizeHeaderName(targetColumnName);
+
+    // Группируем finalMatchedData по OrderId для удобства обработки
+    const currentOrderItemsMap = new Map(); // orderId -> [actual row objects from finalMatchedData]
+    for (const row of finalMatchedData) {
+        const orderId = row[targetOrderIdColumn];
+        if (!currentOrderItemsMap.has(orderId)) {
+            currentOrderItemsMap.set(orderId, []);
+        }
+        currentOrderItemsMap.get(orderId).push(row);
+    }
+
+    // Получаем количество и вес нового товара из формы (парсим в числа)
+    const parsedNewItemQuantity = parseFloat(newItemQuantity) || 0;
+    const parsedNewItemWeight = parseFloat(newItemWeight) || 0;
+
+    for (const [orderId, currentOrderRows] of currentOrderItemsMap.entries()) {
+        const baseRow = currentOrderRows[0] || {}; // Берем первую строку заказа как шаблон
+
+        // Создаем новую строку для добавленного товара
+        const newItem = { ...baseRow }; // Копируем общие данные из первой строки заказа
+
+        // Копируем данные из заказа (поля, которые должны быть одинаковыми для всего заказа)
+        newItem[targetOrderIdColumn] = baseRow[targetOrderIdColumn];
+        newItem[sanitizeHeaderName("ФАМИЛИЯ")] = baseRow[sanitizeHeaderName("ФАМИЛИЯ")];
+        newItem[sanitizeHeaderName("ИМЯ")] = baseRow[sanitizeHeaderName("ИМЯ")];
+        newItem[sanitizeHeaderName("ОТЧЕСТВО")] = baseRow[sanitizeHeaderName("ОТЧЕСТВО")];
+        newItem[sanitizeHeaderName("АДРЕС")] = baseRow[sanitizeHeaderName("АДРЕС")];
+        newItem[sanitizeHeaderName("ГОРОД")] = baseRow[sanitizeHeaderName("ГОРОД")];
+        newItem[sanitizeHeaderName("ОБЛАСТЬ")] = baseRow[sanitizeHeaderName("ОБЛАСТЬ")];
+        newItem[sanitizeHeaderName("индекс")] = baseRow[sanitizeHeaderName("индекс")];
+        newItem[sanitizeHeaderName("ТЕЛЕФОН")] = baseRow[sanitizeHeaderName("ТЕЛЕФОН")];
+        newItem[sanitizeHeaderName("серия паспорта")] = baseRow[sanitizeHeaderName("серия паспорта")];
+        newItem[sanitizeHeaderName("номер паспорта")] = baseRow[sanitizeHeaderName("номер паспорта")];
+        newItem[sanitizeHeaderName("дата выдачи")] = baseRow[sanitizeHeaderName("дата выдачи")];
+        newItem[sanitizeHeaderName("дата рождения")] = baseRow[sanitizeHeaderName("дата рождения")];
+        newItem[sanitizeHeaderName("ИНН")] = baseRow[sanitizeHeaderName("ИНН")];
+        
+        // Заполняем поля нового товара данными из формы
+        newItem[itemNameColumn] = newItemName;
+        newItem[itemQuantityColumn] = parsedNewItemQuantity;
+        newItem[itemPriceColumn] = parseFloat(newItemPrice) || 0;
+        newItem[itemLinkColumn] = newItemLink;
+        newItem[itemWeightColumn] = parsedNewItemWeight; // Вес именно этого нового вложения
+
+        // Вычисляем новые общие значения для заказа
+        // Берем текущие общие значения из первого элемента заказа
+        const originalTotalItemsForOrder = parseFloat(baseRow[totalItemsColumn]) || 0;
+        const originalTotalWeightForOrder = parseFloat(baseRow[totalWeightColumn]) || 0;
+
+        // Прибавляем количество/вес нового товара к существующим общим значениям
+        const updatedTotalItemsForOrder = originalTotalItemsForOrder + parsedNewItemQuantity;
+        const updatedTotalWeightForOrder = originalTotalWeightForOrder + parsedNewItemWeight;
+
+
+        // Обновляем все строки текущего заказа (и существующие, и только что добавленную)
+        // с новыми общими значениями
+        const orderRowsToProcess = [...currentOrderRows, newItem]; // Все строки этого заказа, включая новую
+
+        orderRowsToProcess.forEach(row => {
+            row[totalItemsColumn] = updatedTotalItemsForOrder;
+            row[totalWeightColumn] = updatedTotalWeightForOrder;
+        });
+
+        // Добавляем все эти обработанные строки в финальный массив
+        processedMatchedData.push(...orderRowsToProcess);
+    }
+    
+    finalMatchedData = processedMatchedData; // Обновляем finalMatchedData
+    // === КОНЕЦ ЛОГИКИ ДОБАВЛЕНИЯ СТРОК ИЗ ФОРМЫ ===
+
+    // === ПЕРЕСТРОЙКА orderMap ===
+    // orderMap теперь должен отражать новые индексы и структуру finalMatchedData
+    // Это важно для логики снижения цен и подсветки
+    const newOrderMap = new Map();
+    for (let i = 0; i < finalMatchedData.length; ++i) {
+        const rowObj = finalMatchedData[i];
+        const orderId = rowObj?.[targetOrderIdColumn];
+        if (orderId !== undefined && orderId !== null && orderId !== '') {
+            if (!newOrderMap.has(orderId)) {
+                newOrderMap.set(orderId, []);
+            }
+            newOrderMap.get(orderId).push(i);
+        }
+    }
+    const orderMapForProcessing = newOrderMap; // Используем newOrderMap для следующих шагов
+
+    // === ПОВТОРНАЯ ЛОГИКА УДАЛЕНИЯ ДУБЛИКАТОВ ОБЩЕГО ВЕСА ПОСЫЛКИ ===
+    // Это нужно, чтобы "общий вес посылки" отображался только один раз на заказ
+    // Применяется после всех изменений и добавления новых строк.
+    for (const indices of orderMapForProcessing.values()) { // Используем актуальный orderMap
+        if (indices.length <= 1) continue; // Нет дубликатов, если только один элемент
+
+        const firstRowIndexInOrder = indices[0];
+        const firstRowOfOrder = finalMatchedData[firstRowIndexInOrder];
+        // Берем значение общего веса посылки из первой строки заказа (оно уже обновлено)
+        const valueToKeep = firstRowOfOrder?.[totalWeightColumn];
+
+        // Очищаем значение общего веса посылки в последующих строках того же заказа
+        for (let i = 1; i < indices.length; ++i) {
+            const currentRowIndex = indices[i];
+            const row = finalMatchedData[currentRowIndex];
+            row[totalWeightColumn] = ''; // Очищаем значение
+        }
+    }
+    // === КОНЕЦ ПОВТОРНОЙ ЛОГИКИ УДАЛЕНИЯ ДУБЛИКАТОВ ОБЩЕГО ВЕСА ПОСЫЛКИ ===
+
+
     // === НОВАЯ ЛОГИКА: СНИЖЕНИЕ ЦЕН И ХРАНЕНИЕ ОРИГИНАЛЬНЫХ СУММ ДЛЯ ПОДСВЕТКИ ===
     const targetOrderSumValue = 15595; // Целевая сумма, к которой нужно привести заказы
     const originalOrderSums = new Map(); // orderId -> originalSum (для подсветки)
     const originalOrderQuantities = new Map(); // orderId -> itemCount (для подсветки)
 
-    // Очищенные названия столбцов для расчетов и модификации
-    const quantityColumn = sanitizeHeaderName("количество вложений");
-    const priceColumn = sanitizeHeaderName("Цена товара");
-    const targetOrderIdColumn = sanitizeHeaderName(targetColumnName); // "Номер посылки накладной"
-
     // Проходим по каждому заказу (группе строк с одинаковым ID)
-    for (const indices of orderMap.values()) {
+    for (const indices of orderMapForProcessing.values()) { // Используем orderMapForProcessing
         const orderIdValue = finalMatchedData[indices[0]][targetOrderIdColumn]; // ID текущего заказа
 
         // 1. Рассчитываем оригинальную сумму для этого заказа (до изменений цен)
+        // ВНИМАНИЕ: Здесь 'оригинальная сумма' теперь включает сумму нового добавленного товара
+        // Это соответствует требованию, что подсветка должна отражать данные после добавления нового товара.
         let currentOriginalOrderSum = 0;
         for (const originalRowIndex of indices) {
             const rowData = finalMatchedData[originalRowIndex]; // Получаем данные строки
-            const quantity = parseFloat(rowData[quantityColumn]) || 0;
-            const price = parseFloat(rowData[priceColumn]) || 0;
+            const quantity = parseFloat(rowData[itemQuantityColumn]) || 0; // Используем itemQuantityColumn
+            const price = parseFloat(rowData[itemPriceColumn]) || 0; // Используем itemPriceColumn
             currentOriginalOrderSum += quantity * price;
         }
 
@@ -200,17 +321,16 @@ export default function ExcelComparer() {
 
             for (const originalRowIndex of indices) {
                 const rowData = finalMatchedData[originalRowIndex];
-                const quantity = parseFloat(rowData[quantityColumn]) || 0;
-                let currentPrice = parseFloat(rowData[priceColumn]) || 0;
+                const quantity = parseFloat(rowData[itemQuantityColumn]) || 0;
+                let currentPrice = parseFloat(rowData[itemPriceColumn]) || 0;
 
                 // Применяем коэффициент снижения только если цена и количество больше 0
                 if (quantity > 0 && currentPrice > 0) {
                     let newPrice = currentPrice * reductionFactor;
                     
-                    // Убеждаемся, что цена не станет меньше 0.01 (или другого минимального значения)
                     // Округляем цену до ближайшего целого числа
                     // Math.max(1, ...) гарантирует, что цена будет минимум 1, если она была положительной
-                    rowData[priceColumn] = Math.max(1, Math.round(newPrice)); // Обновляем цену в данных, делаем целой
+                    rowData[itemPriceColumn] = Math.max(1, Math.round(newPrice)); // Обновляем цену в данных, делаем целой
                 } else if (quantity === 0 && currentPrice > 0) {
                     // Если количество 0, но цена есть, это не влияет на общую сумму "кол-во * цена"
                     // В этом случае цена не корректируется, т.к. она не вносит вклад в orderSum
@@ -285,7 +405,7 @@ export default function ExcelComparer() {
 
     if (range) {
         // Проходим по orderMap для применения стилей
-        for (const indices of orderMap.values()) {
+        for (const indices of orderMapForProcessing.values()) { // Используем orderMapForProcessing
             const orderIdValue = finalMatchedData[indices[0]][targetOrderIdColumn]; // ID текущего заказа
 
             // Используем сохраненные оригинальные значения для условий подсветки
@@ -405,12 +525,44 @@ export default function ExcelComparer() {
         )}
       </div>
 
+      {/* Форма для добавления нового товара */}
+      <div style={{ marginTop: '2rem', border: '1px solid #ccc', padding: '1rem', borderRadius: '8px' }}>
+          <h3>Данные для нового товара (добавится к каждому заказу)</h3>
+          <div style={{ display: 'flex', flexDirection: 'column' }}>
+              <div style={{ marginBottom: '1rem'}}>
+                  <label style={{ display: 'block', marginBottom: '5px' }}>Название товара (на русском):</label>
+                  <input type="text" value={newItemName} onChange={e => setNewItemName(e.target.value)} 
+                         style={{ width: '90%', padding: '1rem', borderRadius: '4px', border: '1px solid #ddd' }} />
+              </div>
+              <div style={{ marginBottom: '1rem'}}>
+                  <label style={{ display: 'block', marginBottom: '5px' }}>Количество вложений (нового товара):</label>
+                  <input type="number" value={newItemQuantity} onChange={e => setNewItemQuantity(e.target.value)} 
+                         style={{ width: '90%', padding: '1rem', borderRadius: '4px', border: '1px solid #ddd' }} />
+              </div>
+              <div style={{ marginBottom: '1rem'}}>
+                  <label style={{ display: 'block', marginBottom: '5px' }}>Цена товара (нового товара):</label>
+                  <input type="number" step="1" value={newItemPrice} onChange={e => setNewItemPrice(e.target.value)} 
+                         style={{ width: '90%', padding: '1rem', borderRadius: '4px', border: '1px solid #ddd' }} />
+              </div>
+              <div style={{ marginBottom: '1rem'}}>
+                  <label style={{ display: 'block', marginBottom: '5px' }}>Ссылка на товар (нового товара):</label>
+                  <input type="text" value={newItemLink} onChange={e => setNewItemLink(e.target.value)} 
+                         style={{ width: '90%', padding: '1rem', borderRadius: '4px', border: '1px solid #ddd' }} />
+              </div>
+              <div style={{ marginBottom: '1rem'}}>
+                  <label style={{ display: 'block', marginBottom: '5px' }}>Вес нового вложения (для "общий вес вложений"):</label>
+                  <input type="number" step="0.01" value={newItemWeight} onChange={e => setNewItemWeight(e.target.value)} 
+                         style={{ width: '90%', padding: '1rem', borderRadius: '4px', border: '1px solid #ddd' }} />
+              </div>
+          </div>
+      </div>
+
       <button
-        style={{ marginTop: '2rem' }}
+        style={{ marginTop: '2rem', padding: '10px 20px', fontSize: '16px', cursor: 'pointer', borderRadius: '5px', border: 'none', backgroundColor: '#4CAF50', color: 'white' }}
         onClick={handleCompare}
         disabled={!wb1 || !wb2}
       >
-        Сравнить и скачать
+        Сделать дело!
       </button>
     </div>
   );
