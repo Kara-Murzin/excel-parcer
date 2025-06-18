@@ -66,8 +66,6 @@ export default function ExcelComparer() {
     };
 
     // === ЛОГИКА УДАЛЕНИЯ ДУБЛИКАТОВ ВЕСА (Первичное прохождение до всех модификаций) ===
-    // Эта логика применяется к исходным данным `matched`, чтобы обработать
-    // дубликаты, которые могли присутствовать изначально в загруженном файле.
     const initialWeightColumnName = "包裹重量一个包裹一次备注就行общий вес посылки"; // Оригинальное название
     if (!Object.keys(sheetData1[0] || {}).includes(initialWeightColumnName)) {
         alert(`Колонка "${initialWeightColumnName}" не найдена в файле.`);
@@ -230,7 +228,7 @@ export default function ExcelComparer() {
         newItem[itemQuantityColumn] = parsedNewItemQuantity;
         newItem[itemPriceColumn] = parseFloat(newItemPrice) || 0;
         newItem[itemLinkColumn] = newItemLink;
-        newItem[itemWeightColumn] = parsedNewItemWeight; // Вес именно этого нового вложения
+        newItem[itemWeightColumn] = parsedNewItemWeight;
 
         // Вычисляем новые общие значения для заказа
         // Берем текущие общие значения из первого элемента заказа
@@ -321,13 +319,11 @@ export default function ExcelComparer() {
         const orderIdValue = finalMatchedData[indices[0]][targetOrderIdColumn]; // ID текущего заказа
 
         // 1. Рассчитываем оригинальную сумму для этого заказа (до изменений цен)
-        // ВНИМАНИЕ: Здесь 'оригинальная сумма' теперь включает сумму нового добавленного товара
-        // Это соответствует требованию, что подсветка должна отражать данные после добавления нового товара.
         let currentOriginalOrderSum = 0;
         for (const originalRowIndex of indices) {
-            const rowData = finalMatchedData[originalRowIndex]; // Получаем данные строки
-            const quantity = parseFloat(rowData[itemQuantityColumn]) || 0; // Используем itemQuantityColumn
-            const price = parseFloat(rowData[itemPriceColumn]) || 0; // Используем itemPriceColumn
+            const rowData = finalMatchedData[originalRowIndex];
+            const quantity = parseFloat(rowData[itemQuantityColumn]) || 0;
+            const price = parseFloat(rowData[itemPriceColumn]) || 0;
             currentOriginalOrderSum += quantity * price;
         }
 
@@ -336,24 +332,20 @@ export default function ExcelComparer() {
         originalOrderQuantities.set(orderIdValue, indices.length);
 
         // 2. Корректируем цены, если оригинальная сумма превышает целевую
-        if (currentOriginalOrderSum > targetOrderSumValue && currentOriginalOrderSum > 0) { // Избегаем деления на 0
-            const reductionFactor = targetOrderSumValue / currentOriginalOrderSum; // Коэффициент снижения
+        if (currentOriginalOrderSum > targetOrderSumValue && currentOriginalOrderSum > 0) {
+            const reductionFactor = targetOrderSumValue / currentOriginalOrderSum;
 
             for (const originalRowIndex of indices) {
                 const rowData = finalMatchedData[originalRowIndex];
                 const quantity = parseFloat(rowData[itemQuantityColumn]) || 0;
                 let currentPrice = parseFloat(rowData[itemPriceColumn]) || 0;
 
-                // Применяем коэффициент снижения только если цена и количество больше 0
                 if (quantity > 0 && currentPrice > 0) {
                     let newPrice = currentPrice * reductionFactor;
                     
-                    // Округляем цену до ближайшего целого числа
-                    // Math.max(1, ...) гарантирует, что цена будет минимум 1, если она была положительной
-                    rowData[itemPriceColumn] = Math.max(1, Math.round(newPrice)); // Обновляем цену в данных, делаем целой
+                    rowData[itemPriceColumn] = Math.max(1, Math.round(newPrice));
                 } else if (quantity === 0 && currentPrice > 0) {
                     // Если количество 0, но цена есть, это не влияет на общую сумму "кол-во * цена"
-                    // В этом случае цена не корректируется, т.к. она не вносит вклад в orderSum
                 }
             }
         }
@@ -414,45 +406,81 @@ export default function ExcelComparer() {
 
 
     // Создаем wsMatched из ОТФИЛЬТРОВАННОГО, ОЧИЩЕННОГО И СКОПИРОВАННОГО массива с УКАЗАННЫМ ПОРЯДКОМ ЗАГОЛОВКОВ
-    // finalMatchedData здесь уже содержит скорректированные цены
     const wsMatched = XLSX.utils.json_to_sheet(finalMatchedData, { cellStyles: true, header: finalHeadersMatched });
 
     const range = wsMatched['!ref'] ? XLSX.utils.decode_range(wsMatched['!ref']) : null;
 
     // === ЛОГИКА: ПОДСВЕТКА ЗАКАЗОВ (использует оригинальные суммы для условий) ===
-    const highlightByCountColor = { rgb: "FFFF99" }; // Светло-желтый для количества товаров > 5
+    // УДАЛЯЕМ highlightByCountColor и shouldHighlightByCount
     const highlightByValueColor = { rgb: "FFCC00" }; // Оранжевый для суммы заказа > 16000
+    const highlightByQuantityColor = { rgb: "FFFF99" }; // Светло-желтый для "количество вложений" > 5 (НОВОЕ)
 
     if (range) {
-        // Проходим по orderMap для применения стилей
-        for (const indices of orderMapForProcessing.values()) { // Используем orderMapForProcessing
-            const orderIdValue = finalMatchedData[indices[0]][targetOrderIdColumn]; // ID текущего заказа
+        // Проходим по ВСЕМ строкам в finalMatchedData
+        for (let R = range.s.r + 1; R <= range.e.r; ++R) { // Начинаем с 1-й строки данных (после заголовков)
+            const rowIndexInData = R - 1; // Индекс в массиве данных (0-based)
+            const rowData = finalMatchedData[rowIndexInData];
 
-            // Используем сохраненные оригинальные значения для условий подсветки
-            const itemCount = originalOrderQuantities.get(orderIdValue) || 0;
-            const currentOriginalOrderSum = originalOrderSums.get(orderIdValue) || 0;
+            if (!rowData) continue; // Пропустить, если строка данных отсутствует
 
-            // Определяем, какие условия подсветки выполнены
-            const shouldHighlightByCount = itemCount > 5;
-            const shouldHighlightByValue = currentOriginalOrderSum > 16000; // Условие > 16000, не 15590
+            const orderIdValue = rowData[targetOrderIdColumn];
+            const currentOriginalOrderSum = originalOrderSums.get(orderIdValue) || 0; // Сумма заказа для текущей строки
+            const itemQuantity = parseFloat(rowData[itemQuantityColumn]) || 0; // Количество вложений для текущей строки
+
+            // Определяем, какие условия подсветки выполнены для ТЕКУЩЕЙ СТРОКИ
+            const shouldHighlightByValue = currentOriginalOrderSum > 16000; // Условие > 16000
+            const shouldHighlightByQuantity = itemQuantity > 5; // НОВОЕ УСЛОВИЕ: количество вложений > 5
 
             let currentHighlightColor = null;
 
-            // Приоритет: если оригинальная сумма заказа большая, используем оранжевый цвет
+            // Приоритет: если оригинальная сумма заказа большая, используем оранжевый цвет для всей строки заказа
             if (shouldHighlightByValue) {
                 currentHighlightColor = highlightByValueColor;
+                // Если оранжевый цвет, то вся строка заказа должна быть оранжевой.
+                // Находим все строки для этого заказа и применяем оранжевый.
+                const indicesForThisOrder = orderMapForProcessing.get(orderIdValue);
+                if (indicesForThisOrder) {
+                    for (const idx of indicesForThisOrder) {
+                        const excelRow = idx + 1; // Excel row is 1-based
+                        for (let C = range.s.c; C <= range.e.c; ++C) {
+                            const cellRef = XLSX.utils.encode_cell({ r: excelRow, c: C });
+                            const cell = wsMatched[cellRef];
+                            if (cell) {
+                                if (!cell.s) cell.s = {};
+                                cell.s.fill = {
+                                    fgColor: highlightByValueColor,
+                                    patternType: "solid"
+                                };
+                            }
+                        }
+                    }
+                }
             } 
-            // Иначе, если товаров много, используем светло-желтый
-            else if (shouldHighlightByCount) {
-                currentHighlightColor = highlightByCountColor;
+            // Иначе, если количество вложений в ТЕКУЩЕЙ строке > 5, используем светло-желтый
+            else if (shouldHighlightByQuantity) {
+                currentHighlightColor = highlightByQuantityColor;
+                // Применяем желтый только к ТЕКУЩЕЙ строке
+                for (let C = range.s.c; C <= range.e.c; ++C) {
+                    const cellRef = XLSX.utils.encode_cell({ r: R, c: C });
+                    const cell = wsMatched[cellRef];
+                    if (cell) {
+                        if (!cell.s) cell.s = {};
+                        cell.s.fill = {
+                            fgColor: currentHighlightColor,
+                            patternType: "solid"
+                        };
+                    }
+                }
             }
-            
-            // Индексы строк в Excel (1-based), принадлежащих текущему заказу
-            const firstRowExcel = indices[0] + 1;
-            const lastRowExcel = indices[indices.length - 1] + 1;
 
-            // Применяем стили ко всем ячейкам в строках этого заказа
-            for (let R = firstRowExcel; R <= lastRowExcel; ++R) {
+            // Логика границ (верхняя для первой строки заказа, нижняя для последней)
+            // Эту часть нужно применять для всего заказа, независимо от подсветки.
+            // Найдем, является ли текущая строка первой или последней в своем заказе.
+            const indicesForCurrentOrder = orderMapForProcessing.get(orderIdValue);
+            if (indicesForCurrentOrder) {
+                const isFirstRowOfOrder = rowIndexInData === indicesForCurrentOrder[0];
+                const isLastRowOfOrder = rowIndexInData === indicesForCurrentOrder[indicesForCurrentOrder.length - 1];
+
                 for (let C = range.s.c; C <= range.e.c; ++C) {
                     const cellRef = XLSX.utils.encode_cell({ r: R, c: C });
                     const cell = wsMatched[cellRef];
@@ -460,22 +488,13 @@ export default function ExcelComparer() {
                     if (cell) {
                         if (!cell.s) cell.s = {};
 
-                        // Применяем фоновую заливку, если цвет определен
-                        if (currentHighlightColor) {
-                            cell.s.fill = {
-                                fgColor: currentHighlightColor,
-                                patternType: "solid"
-                            };
-                        }
-
-                        // Сохраняем логику границ (верхняя для первой строки, нижняя для последней)
-                        if (R === firstRowExcel) {
+                        if (isFirstRowOfOrder) {
                             cell.s.border = {
                                 ...(cell.s.border || {}),
                                 top: borderStyle
                             };
                         }
-                        if (R === lastRowExcel) {
+                        if (isLastRowOfOrder) {
                             cell.s.border = {
                                 ...(cell.s.border || {}),
                                 bottom: borderStyle
